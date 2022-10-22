@@ -1,3 +1,5 @@
+# python tail -f log /var/log/secure, save the ip on sqlite and use iptables to block ip
+
 import os
 import re
 import time
@@ -20,7 +22,8 @@ class IpBlocker:
             self.cur = self.conn.cursor()
             # load all ips from db
             for line in self.selectall():
-                self.blockip(line[1])
+                if line[3] >= 10:
+                    self.blockip(line[1])
 
     # insert ip into db
     def insert(self, ip, time, count):
@@ -50,7 +53,7 @@ class IpBlocker:
     # close db
     def close(self):
         self.conn.close()
-    
+
     # block ip
     def blockip(self, ip):
         subprocess.call(['iptables', '-I', 'INPUT', '-s', ip, '-j', 'DROP'])
@@ -79,34 +82,37 @@ class IpBlocker:
             return ip
         else:
             return None
-    
+
 
 if __name__ == '__main__':
-    ipstounlock = [
-        'localhost'
+    ips_to_unlock = [
+        'localhost',
+        '85.243.14.93'
     ]
-    
+
     # init ipblocker
     ipblocker = IpBlocker('ipblocker.db')
     # unblock some ips
-    for ip in ipstounlock:
+    for ip in ips_to_unlock:
         ipblocker.unblockip(ip)
         ipblocker.delete(ip)
     # tail -f log
     for line in ipblocker.tailf('/var/log/secure'):
-        # parse log
-        ip = ipblocker.parse(line)
-        if ip:
-            # check if ip exists
-            if ipblocker.select(ip):
-                # update ip
-                ipblocker.update(ip, int(time.time()), ipblocker.select(ip)[3] + 1)
-                # block ip
-                if ipblocker.select(ip)[3] >= 10:
-                    ipblocker.blockip(ip)
-            else:
-                # insert ip
-                ipblocker.insert(ip, int(time.time()), 1)
+        # check if line contains sshd * failed password with regex
+        if re.search(r'sshd.*: Failed password for', line):
+            # parse log
+            ip = ipblocker.parse(line)
+            if ip:
+                # check if ip exists
+                if ipblocker.select(ip):
+                    # update ip
+                    ipblocker.update(ip, int(time.time()), ipblocker.select(ip)[3] + 1)
+                    # block ip
+                    if ipblocker.select(ip)[3] >= 10:
+                        ipblocker.blockip(ip)
+                else:
+                    # insert ip
+                    ipblocker.insert(ip, int(time.time()), 1)
 
     # close db
     ipblocker.close()
